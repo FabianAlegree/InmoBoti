@@ -5,6 +5,7 @@ import os
 import fitz
 import time
 import random
+import threading
 
 wa_token = os.environ.get("WA_TOKEN")
 genai.configure(api_key=os.environ.get("GEN_API"))
@@ -39,7 +40,7 @@ convo.send_message(commands)
 def random_delay():
     return random.uniform(45, 85)
 
-def send(answer, sender, phone_id):
+def send_delayed(answer, sender, phone_id):
     delay = random_delay()
     time.sleep(delay)
     
@@ -87,7 +88,7 @@ def webhook():
             if data["type"] == "text":
                 prompt = data["text"]["body"]
                 convo.send_message(prompt)
-                send(convo.last.text, sender, phone_id)
+                threading.Thread(target=send_delayed, args=(convo.last.text, sender, phone_id)).start()
             else:
                 media_url_endpoint = f'https://graph.facebook.com/v18.0/{data[data["type"]]["id"]}/'
                 headers = {'Authorization': f'Bearer {wa_token}'}
@@ -108,10 +109,11 @@ def webhook():
                         response = model.generate_content(["What is this", file])
                         answer = response._result.candidates[0].content.parts[0].text
                         convo.send_message(f"Direct image input has limitations, so this message is created by an llm model based on the image prompt of user, reply to the user assuming you saw that image: {answer}")
-                        send(convo.last.text, sender, phone_id)
+                        threading.Thread(target=send_delayed, args=(convo.last.text, sender, phone_id)).start()
                         remove(destination)
                 else:
-                    send("This format is not Supported by the bot ☹", sender, phone_id)
+                    threading.Thread(target=send_delayed, args=("This format is not Supported by the bot ☹", sender, phone_id)).start()
+                    return jsonify({"status": "ok"}), 200
                 with open(filename, "wb") as temp_media:
                     temp_media.write(media_download_response.content)
                 file = genai.upload_file(path=filename, display_name="tempfile")
@@ -119,12 +121,12 @@ def webhook():
                 answer = response._result.candidates[0].content.parts[0].text
                 remove("/tmp/temp_image.jpg", "/tmp/temp_audio.mp3")
                 convo.send_message(f"Direct media input has limitations, so this is a voice/image message from user which is transcribed by an llm model, reply to the user assuming you heard/saw media file: {answer}")
-                send(convo.last.text, sender, phone_id)
+                threading.Thread(target=send_delayed, args=(convo.last.text, sender, phone_id)).start()
                 files = genai.list_files()
                 for file in files:
                     file.delete()
-        except:
-            pass
+        except Exception as e:
+            print(f"Error: {str(e)}")
         return jsonify({"status": "ok"}), 200
 
 if __name__ == "__main__":

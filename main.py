@@ -2,10 +2,6 @@ import google.generativeai as genai
 from flask import Flask, request, jsonify
 import requests
 import os
-import fitz
-import time
-import random
-import threading
 
 wa_token = os.environ.get("WA_TOKEN")
 genai.configure(api_key=os.environ.get("GEN_API"))
@@ -13,37 +9,14 @@ model_name = "gemini-1.5-pro"
 
 app = Flask(__name__)
 
-generation_config = {
-    "temperature": 1,
-    "top_p": 0.95,
-    "top_k": 0,
-    "max_output_tokens": 8192,
-}
-
-safety_settings = [
-    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
-    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
-    {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
-    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
-]
-
-model = genai.GenerativeModel(model_name=model_name,
-                              generation_config=generation_config,
-                              safety_settings=safety_settings)
-
+model = genai.GenerativeModel(model_name=model_name)
 convo = model.start_chat(history=[])
 
 with open("instructions.txt", "r") as f:
     commands = f.read()
 convo.send_message(commands)
 
-def random_delay():
-    return random.uniform(45, 85)
-
-def send_delayed(answer, sender, phone_id):
-    delay = random_delay()
-    time.sleep(delay)
-    
+def send(answer, sender, phone_id):
     url = f"https://graph.facebook.com/v18.0/{phone_id}/messages"
     headers = {
         'Authorization': f'Bearer {wa_token}',
@@ -58,13 +31,6 @@ def send_delayed(answer, sender, phone_id):
     
     response = requests.post(url, headers=headers, json=data)
     return response
-
-def remove(*file_paths):
-    for file in file_paths:
-        if os.path.exists(file):
-            os.remove(file)
-        else:
-            pass
 
 @app.route("/", methods=["GET", "POST"])
 def index():
@@ -88,43 +54,9 @@ def webhook():
             if data["type"] == "text":
                 prompt = data["text"]["body"]
                 convo.send_message(prompt)
-                threading.Thread(target=send_delayed, args=(convo.last.text, sender, phone_id)).start()
+                send(convo.last.text, sender, phone_id)
             else:
-                media_url_endpoint = f'https://graph.facebook.com/v18.0/{data[data["type"]]["id"]}/'
-                headers = {'Authorization': f'Bearer {wa_token}'}
-                media_response = requests.get(media_url_endpoint, headers=headers)
-                media_url = media_response.json()["url"]
-                media_download_response = requests.get(media_url, headers=headers)
-                if data["type"] == "audio":
-                    filename = "/tmp/temp_audio.mp3"
-                elif data["type"] == "image":
-                    filename = "/tmp/temp_image.jpg"
-                elif data["type"] == "document":
-                    doc = fitz.open(stream=media_download_response.content, filetype="pdf")
-                    for _, page in enumerate(doc):
-                        destination = "/tmp/temp_image.jpg"
-                        pix = page.get_pixmap()
-                        pix.save(destination)
-                        file = genai.upload_file(path=destination, display_name="tempfile")
-                        response = model.generate_content(["What is this", file])
-                        answer = response._result.candidates[0].content.parts[0].text
-                        convo.send_message(f"Direct image input has limitations, so this message is created by an llm model based on the image prompt of user, reply to the user assuming you saw that image: {answer}")
-                        threading.Thread(target=send_delayed, args=(convo.last.text, sender, phone_id)).start()
-                        remove(destination)
-                else:
-                    threading.Thread(target=send_delayed, args=("This format is not Supported by the bot ☹", sender, phone_id)).start()
-                    return jsonify({"status": "ok"}), 200
-                with open(filename, "wb") as temp_media:
-                    temp_media.write(media_download_response.content)
-                file = genai.upload_file(path=filename, display_name="tempfile")
-                response = model.generate_content(["What is this", file])
-                answer = response._result.candidates[0].content.parts[0].text
-                remove("/tmp/temp_image.jpg", "/tmp/temp_audio.mp3")
-                convo.send_message(f"Direct media input has limitations, so this is a voice/image message from user which is transcribed by an llm model, reply to the user assuming you heard/saw media file: {answer}")
-                threading.Thread(target=send_delayed, args=(convo.last.text, sender, phone_id)).start()
-                files = genai.list_files()
-                for file in files:
-                    file.delete()
+                send("Lo siento, solo puedo procesar mensajes de texto por ahora.", sender, phone_id)
         except Exception as e:
             print(f"Error: {str(e)}")
         return jsonify({"status": "ok"}), 200
